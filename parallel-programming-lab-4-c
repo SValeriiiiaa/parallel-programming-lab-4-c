@@ -1,0 +1,255 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <unistd.h>
+FILE *zapic;
+sem_t scr1;
+pthread_mutex_t mcr1 = PTHREAD_MUTEX_INITIALIZER;
+pthread_barrier_t bcr2;
+pthread_cond_t sig21 = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t mut21 = PTHREAD_MUTEX_INITIALIZER;
+int flag2 = 0;
+int flag3 = 0;
+int flag4 = 0;
+int flag6 = 0;
+
+int max_buff_lengs=30;
+
+struct t_elem {
+    struct t_elem* next;
+    int number;
+};
+
+struct t_elem* last = NULL;
+
+void add_elem()
+{
+    struct t_elem* NextIn = malloc(sizeof(struct t_elem));
+
+    if (last == NULL)
+    {
+        NextIn->number = 0;
+        NextIn->next = NextIn;
+        last = NextIn;
+    }
+    else
+    {
+        NextIn->number = last->number + 1;
+        NextIn->next = last->next;
+        last->next = NextIn;
+        last = NextIn;
+    }
+}
+
+struct t_elem* get_elem()
+{
+    struct t_elem* NextOut = last->next;
+
+    if (NextOut == last)
+    {
+        last = NULL;
+    }
+    else
+    {
+        last->next = NextOut->next;
+    }
+    return NextOut;
+}
+int iatom1 = 0, iatom2 = 0;
+unsigned uatom1 = 0, uatom2 = 0;
+long latom1 = 0, latom2 = 0;
+unsigned long luatom1 = 0, luatom2 = 0;
+
+void Atomuse(int thread_number) {
+    fprintf(zapic, "Untyped thread %d: Vars usage\n", thread_number);
+    fprintf(zapic, "int: %d, %d\n", iatom1, iatom2);
+    fprintf(zapic, "unsigned: %u, %u\n", uatom1, uatom2);
+    fprintf(zapic, "long: %ld, %ld\n", latom1, latom2);
+    fprintf(zapic, "long unsigned: %lu, %lu\n", luatom1, luatom2);
+}
+
+void Atommod(int thread_number) {
+    fprintf(zapic, "Untyped thread %d: Vars modification\n", thread_number);
+    fprintf(zapic, "int sub fetch: %d\n", __atomic_sub_fetch(&iatom1, thread_number, __ATOMIC_RELAXED));
+    fprintf(zapic, "int fetch sub: %d\n", __atomic_fetch_add(&iatom2, thread_number, __ATOMIC_RELAXED));
+    fprintf(zapic, "unsigned xor fetch: %u\n", __atomic_and_fetch(&uatom1, thread_number, __ATOMIC_RELAXED));
+    fprintf(zapic, "unsigned or fetch: %u\n", __atomic_xor_fetch(&uatom2, thread_number, __ATOMIC_RELAXED));
+    fprintf(zapic, "long fetch and: %ld\n", __atomic_fetch_or(&latom1, thread_number, __ATOMIC_RELAXED));
+    fprintf(zapic, "long fetch nand: %ld\n", __atomic_fetch_nand(&latom2, thread_number, __ATOMIC_RELAXED));
+    fprintf(zapic, "int compare exchange n: %d\n",
+        __atomic_compare_exchange_n(&luatom1, &luatom2, thread_number, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED));
+    fprintf(zapic, "int exchange: before %lu, %lu;", luatom2, luatom1);
+    __atomic_exchange(&luatom2, &luatom1, &luatom1, __ATOMIC_RELAXED);
+    fprintf(zapic, " after %lu, %lu\n", luatom2, luatom1);
+}
+
+pthread_t pth1;
+pthread_t pth2;
+pthread_t pth3;
+pthread_t pth4;
+pthread_t pth5;
+pthread_t pth6;
+
+void* thread1(void* thread_number) {
+    int number = *(int*)thread_number;
+    int sem_value;
+    while (1) {
+        sem_getvalue(&scr1,&sem_value);
+        if (sem_value < max_buff_lengs) {
+        while (pthread_mutex_trylock (&mcr1) != 0) {
+        fprintf(zapic, "Producer thread%d: mutex busy\n", number);
+        }
+        add_elem();
+        printf("Producer thread%d: semaphore=%d; element %d creted; \n", number,sem_value,last->number);
+        sem_post(&scr1);
+        pthread_mutex_unlock (&mcr1);
+        }
+    }
+    return NULL;
+}
+
+void* thread2(void* thread_number) {
+    int number = *(int*)thread_number;
+    struct t_elem* curr_elem=NULL;
+    int sem_value;
+    while (1) {
+        pthread_mutex_lock(&mut21);
+        while (flag2 == 0) {
+            pthread_cond_wait(&sig21, &mut21);
+        }
+        flag2 = 0;
+        pthread_mutex_unlock(&mut21);
+        Atomuse(number);
+        Atommod(number);
+        if(sem_trywait (&scr1)!=0){
+        fprintf(zapic, "Producer thread%d: semaphor busy\n", number);
+        }else{
+        sem_getvalue(&scr1,&sem_value);
+        while (pthread_mutex_trylock (&mcr1) != 0) {
+        fprintf(zapic, "Producer thread%d: mutex busy\n", number);
+        }
+        curr_elem = (struct t_elem*)get_elem();
+        printf("Consumer thread%d: semaphore=%d; element %d taken; \n",number,sem_value,curr_elem->number);
+        free (curr_elem);
+        pthread_mutex_unlock(&mcr1);
+        }
+    }
+    return NULL;
+}
+void* thread3(void* thread_number) {
+    int number = *(int*)thread_number;
+    while (1) {
+        pthread_mutex_lock(&mut21);
+        while (flag3 == 0) {
+            pthread_cond_wait(&sig21, &mut21);
+        }
+        flag3 = 0;
+        pthread_mutex_unlock(&mut21);
+        Atomuse(number);
+        pthread_barrier_wait(&bcr2);
+        Atomuse(number);
+    }
+    return NULL;
+}
+void* thread4(void* thread_number) {
+    int number = *(int*)thread_number;
+    struct t_elem* curr_elem=NULL;
+    int sem_value;
+    while (1) {
+        pthread_mutex_lock(&mut21);
+        while (flag4 == 0) {
+            pthread_cond_wait(&sig21, &mut21);
+        }
+        flag4 = 0;
+        pthread_mutex_unlock(&mut21);
+        if(sem_trywait (&scr1)!=0){
+        fprintf(zapic, "Producer thread%d: semaphor busy\n", number);
+        }else{
+        sem_getvalue(&scr1,&sem_value);
+        while (pthread_mutex_trylock (&mcr1) != 0) {
+        fprintf(zapic, "Producer thread%d: mutex busy\n", number);
+        }
+        curr_elem = (struct t_elem*)get_elem();
+        printf("Consumer thread%d: semaphore=%d; element %d taken; \n",number,sem_value,curr_elem->number);
+        free (curr_elem);
+        pthread_mutex_unlock(&mcr1);
+        }
+    }
+    return NULL;
+}
+void* thread5(void* thread_number) {
+    int number = *(int*)thread_number;
+    struct t_elem* curr_elem=NULL;
+    int sem_value;
+    while (1) {
+    Atommod(number);
+        pthread_mutex_lock(&mut21);
+        flag2 = 1;
+        flag3 = 1;
+        flag4 = 1;
+        flag6 = 1;
+        pthread_cond_broadcast(&sig21);
+        pthread_mutex_unlock(&mut21);
+        if(sem_trywait (&scr1)!=0){
+        fprintf(zapic, "Producer thread%d: semaphor busy\n", number);
+        }else{
+        sem_getvalue(&scr1,&sem_value);
+        while (pthread_mutex_trylock (&mcr1) != 0) {
+        fprintf(zapic, "Producer thread%d: mutex busy\n", number);
+        }
+        curr_elem = (struct t_elem*)get_elem();
+        printf("Consumer thread%d: semaphore=%d; element %d taken; \n",number,sem_value,curr_elem->number);
+        free (curr_elem);
+        pthread_mutex_unlock(&mcr1);
+        }
+    }
+    return NULL;
+}
+void* thread6(void* thread_number) {
+    int number = *(int*)thread_number;
+    while (1) {
+        pthread_mutex_lock(&mut21);
+        while (flag6 == 0) {
+            pthread_cond_wait(&sig21, &mut21);
+        }
+        flag6 = 0;
+        pthread_mutex_unlock(&mut21);
+        Atomuse(number);
+        pthread_barrier_wait(&bcr2);
+        Atommod(number);
+    }
+    return NULL;
+}
+int main() {
+    zapic = fopen("zapic.txt", "w");
+
+    int thread1_number = 1;
+    int thread2_number = 2;
+    int thread3_number = 3;
+    int thread4_number = 4;
+    int thread5_number = 5;
+    int thread6_number = 6;
+
+    sem_init(&scr1, 0, 0);
+    pthread_barrier_init(&bcr2, NULL, 2);
+
+    pthread_create(&pth1, NULL, &thread1, &thread1_number);
+    pthread_create(&pth2, NULL, &thread2, &thread2_number);
+    pthread_create(&pth3, NULL, &thread3, &thread3_number);
+    pthread_create(&pth4, NULL, &thread4, &thread4_number);
+    pthread_create(&pth5, NULL, &thread5, &thread5_number);
+    pthread_create(&pth6, NULL, &thread6, &thread6_number);
+
+    pthread_join(pth1, NULL);
+    pthread_join(pth2, NULL);
+    pthread_join(pth3, NULL);
+    pthread_join(pth4, NULL);
+    pthread_join(pth5, NULL);
+    pthread_join(pth6, NULL);
+
+    sem_destroy(&scr1);
+    fclose(zapic);
+
+    return 0;
+}
